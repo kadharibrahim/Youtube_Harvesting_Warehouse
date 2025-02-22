@@ -1,20 +1,26 @@
+
 import streamlit as st
 import mysql.connector
 import pandas as pd
 from googleapiclient.discovery import build
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
 
 # ---------------------- Initialize YouTube API ----------------------
-API_KEY = "AIzaSyAkcTibbNLMrxcf8Z_FUYvqFJUVTgIny34"
+API_KEY = os.getenv("API_KEY")
 youtube = build("youtube", "v3", developerKey=API_KEY)
 
 # ---------------------- Database Connection ----------------------
 def get_db_connection():
     try:
         return mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="90941122@Ibi",
-            database="ibi"
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_NAME")
         )
     except mysql.connector.Error as e:
         st.error(f"❌ Database connection failed: {e}")
