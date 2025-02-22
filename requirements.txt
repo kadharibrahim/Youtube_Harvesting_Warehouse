@@ -1,0 +1,5 @@
+google-api-python-client
+streamlit
+mysql-connector-python
+pandas
+python-dotenv
