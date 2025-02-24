@@ -5,30 +5,33 @@ import plotly.express as px
 from googleapiclient.discovery import build
 import os
 from dotenv import load_dotenv
- 
+
+# Load environment variables
+load_dotenv()
+
 # ---------------------- Initialize YouTube API ----------------------
-API_KEY = "AIzaSyAkcTibbNLMrxcf8Z_FUYvqFJUVTgIny34"
+API_KEY = os.getenv("YOUTUBE_API_KEY")
 youtube = build("youtube", "v3", developerKey=API_KEY)
- 
+
 # ---------------------- Database Connection ----------------------
 def get_db_connection():
     try:
         return mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="90941122@Ibi",
-            database="ibi"
+            host=os.getenv("MYSQL_HOST"),
+            user=os.getenv("MYSQL_USER"),
+            password=os.getenv("MYSQL_PASSWORD"),
+            database=os.getenv("MYSQL_DATABASE")
         )
     except mysql.connector.Error as e:
-        st.error(f"❌ Database connection failed: {e}")
+        st.error(f"\u274C Database connection failed: {e}")
         return None
- 
+
 # ---------------------- Store Channel Data into MySQL ----------------------
 def store_channel_data(channel_data):
     conn = get_db_connection()
     if not conn:
         return
- 
+
     try:
         with conn.cursor() as cursor:
             cursor.execute("""
@@ -51,21 +54,21 @@ def store_channel_data(channel_data):
                 channel_data["playlist_id"]
             ))
             conn.commit()
-        st.success(f"✅ Data for {channel_data['channel_name']} stored successfully!")
+        st.success(f"\u2705 Data for {channel_data['channel_name']} stored successfully!")
     except Exception as e:
-        st.error(f"❌ Error storing channel data: {e}")
+        st.error(f"\u274C Error storing channel data: {e}")
     finally:
         conn.close()
- 
+
 # ---------------------- Fetch YouTube Data ----------------------
 def fetch_channel_data(channel_id):
     try:
         request = youtube.channels().list(
-            part="snippet,statistics",
+            part="snippet,statistics,contentDetails",
             id=channel_id
         )
         response = request.execute()
-       
+        
         if "items" in response and response["items"]:
             data = response["items"][0]
             return {
@@ -75,36 +78,36 @@ def fetch_channel_data(channel_id):
                 "views": data["statistics"].get("viewCount", 0),
                 "total_videos": data["statistics"].get("videoCount", 0),
                 "description": data["snippet"].get("description", ""),
-                "playlist_id": data.get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads", "")
+                "playlist_id": data["contentDetails"]["relatedPlaylists"].get("uploads", "")
             }
         return None
     except Exception as e:
-        st.error(f"❌ Error fetching channel data: {e}")
+        st.error(f"\u274C Error fetching channel data: {e}")
         return None
- 
+
 # ---------------------- Fetch Data from MySQL ----------------------
 def fetch_data(query, params=None):
     conn = get_db_connection()
     if not conn:
         return pd.DataFrame()  
- 
+
     try:
         with conn.cursor(dictionary=True) as cursor:
             cursor.execute(query, params if params else ())
             result = cursor.fetchall()
             return pd.DataFrame(result)
     except Exception as e:
-        st.error(f"❌ Error executing query: {e}")
+        st.error(f"\u274C Error executing query: {e}")
         return pd.DataFrame()
     finally:
         conn.close()
- 
+
 # ---------------------- Data Migration Function ----------------------
 def migrate_data():
     conn = get_db_connection()
     if not conn:
         return
- 
+
     try:
         with conn.cursor() as cursor:
             cursor.execute("""
@@ -116,13 +119,13 @@ def migrate_data():
                 comments = VALUES(comments)
             """)
             conn.commit()
-        st.success("✅ Data migration completed successfully!")
+        st.success("\u2705 Data migration completed successfully!")
     except Exception as e:
-        st.error(f"❌ Data migration failed: {e}")
+        st.error(f"\u274C Data migration failed: {e}")
     finally:
         conn.close()
- 
 
+# ---------------------- Streamlit UI ----------------------
 st.markdown("""
     <div style="text-align: center;">
         <img src="https://upload.wikimedia.org/wikipedia/commons/b/b8/YouTube_Logo_2017.svg" alt="YouTube Logo" width="150">
@@ -130,6 +133,8 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
+
+import streamlit as st
 
 # ---------------------- Streamlit UI Layout ----------------------
 st.sidebar.title("📌 Skills Takeaway from This Project")
@@ -142,12 +147,9 @@ st.sidebar.write("""
 - 📊 **Data Visualization using Plotly & Matplotlib**  
 """)
 
- 
- 
- 
 # User input for Channel ID
 channel_id = st.text_input("🔎 Enter the Channel ID")
- 
+
 col1, col2 = st.columns(2)
 with col1:
     if st.button("📥 Collect and Store Data"):
@@ -159,21 +161,21 @@ with col1:
                 st.warning("⚠️ No data found for the given Channel ID.")
         else:
             st.warning("⚠️ Please enter a Channel ID.")
- 
+
 with col2:
     if st.button("🛠️ Migrate to SQL"):
         migrate_data()
- 
+
 # Fetch available channels
 df_channels = fetch_data("SELECT channel_id, channel_name FROM channels")
- 
+
 # Select Channel Dropdown
 channel_options = ["None"] + df_channels["channel_name"].tolist() if not df_channels.empty else ["None"]
 selected_channel_name = st.selectbox("🔽 Select a Channel", channel_options)
- 
+
 # Get selected Channel ID
 selected_channel_id = df_channels[df_channels["channel_name"] == selected_channel_name]["channel_id"].values[0] if selected_channel_name != "None" and not df_channels.empty else None
- 
+
 col3, col4 = st.columns(2)
 with col3:
     if st.button("📥 Collect and Store Data for Selected Channel"):
@@ -185,44 +187,38 @@ with col3:
                 st.warning("⚠️ No data found for the selected Channel.")
         else:
             st.warning("⚠️ Please select a channel.")
- 
+
 with col4:
     if st.button("🛠️ Migrate to SQL for Selected Channel"):
         migrate_data()
- 
+
 # ---------------------- Display Data ----------------------
 active_channel_id = channel_id if channel_id else selected_channel_id
- 
+
 if active_channel_id:
     st.subheader(f"📌 Showing Data for Channel: {selected_channel_name if selected_channel_name != 'None' else channel_id}")
- 
+
     st.write("### 📌 Channel Details")
     df_channel_data = fetch_data("SELECT * FROM channels WHERE channel_id = %s", (active_channel_id,))
     if not df_channel_data.empty:
         st.dataframe(df_channel_data)
     else:
         st.warning("⚠️ No channel found.")
- 
- 
+
     st.write("### 📌 Playlists from this Channel")
- 
     df_playlists = fetch_data("SELECT * FROM playlists WHERE channel_id = %s", (active_channel_id,))
- 
     if not df_playlists.empty:
         st.dataframe(df_playlists)
     else:
         st.warning("⚠️ No playlists found.")
- 
+
     st.write("### 📌 Videos from this Channel")
- 
     df_videos = fetch_data("SELECT * FROM videos WHERE channel_id = %s", (active_channel_id,))
- 
     if not df_videos.empty:
         st.dataframe(df_videos)
     else:
         st.warning("⚠️ No videos found.")
- 
- 
+
     if not df_videos.empty:
         video_ids = tuple(df_videos["video_id"])
         if video_ids:
@@ -231,10 +227,9 @@ if active_channel_id:
             query = f"SELECT * FROM comments WHERE video_id IN ({placeholders})"
             df_comments = fetch_data(query, video_ids)
             st.dataframe(df_comments if not df_comments.empty else st.warning("⚠️ No comments found."))
- 
 else:
     st.warning("⚠️ Please enter a Channel ID or select a channel.")
- 
+
 # ---------------------- SQL Queries for Insights ----------------------
 QUERIES = {
     "Videos and their Channels": """
@@ -323,11 +318,17 @@ QUERIES = {
 }
 
  
-# ---------------------- Run SQL Queries from Dropdown ----------------------
+import streamlit as st
+import plotly.express as px
+
+def fetch_data(query, params=None):
+    # Placeholder function for database queries
+    return ""  # Replace with actual database fetching logic
+
 st.title("🔍 YouTube Data Insights")
- 
+
 query_option = st.selectbox("Select a query:", list(QUERIES.keys()))
- 
+
 if st.button("Run Query"):
     df = fetch_data(QUERIES[query_option])
     st.dataframe(df if not df.empty else st.warning("⚠️ No data found for this query."))
