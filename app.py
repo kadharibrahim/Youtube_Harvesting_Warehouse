@@ -1,5 +1,6 @@
 import streamlit as st
-import mysql.connector
+import psycopg2
+import os
 import pandas as pd
 import plotly.express as px
 from googleapiclient.discovery import build
@@ -16,16 +17,16 @@ youtube = build("youtube", "v3", developerKey=API_KEY)
 # ---------------------- Database Connection ----------------------
 def get_db_connection():
     try:
-        return mysql.connector.connect(
-            host=os.getenv("MYSQL_HOST"),
-            user=os.getenv("MYSQL_USER"),
-            password=os.getenv("MYSQL_PASSWORD"),
-            database=os.getenv("MYSQL_DATABASE")
+        return psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            sslmode='require'
         )
-    except mysql.connector.Error as e:
-        st.error(f"\u274C Database connection failed: {e}")
+    except Exception as e:
+        st.error(f"❌ Database connection failed: {e}")
         return None
-
 # ---------------------- Store Channel Data into MySQL ----------------------
 def store_channel_data(channel_data):
     conn = get_db_connection()
