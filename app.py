@@ -1,20 +1,18 @@
 import streamlit as st
 import psycopg2
+import psycopg2.extras
 import os
 import pandas as pd
 import plotly.express as px
 from googleapiclient.discovery import build
-import os
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# ---------------------- Initialize YouTube API ----------------------
 API_KEY = os.getenv("YOUTUBE_API_KEY")
 youtube = build("youtube", "v3", developerKey=API_KEY)
 
-# ---------------------- Database Connection ----------------------
+# ---------------------- PostgreSQL Connection ----------------------
 def get_db_connection():
     try:
         return psycopg2.connect(
@@ -27,50 +25,32 @@ def get_db_connection():
     except Exception as e:
         st.error(f"❌ Database connection failed: {e}")
         return None
-# ---------------------- Store Channel Data into MySQL ----------------------
-def store_channel_data(channel_data):
+
+# ---------------------- Utility ----------------------
+def fetch_data(query, params=None):
     conn = get_db_connection()
     if not conn:
-        return
-
+        return pd.DataFrame()
     try:
-        with conn.cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO channels (channel_id, channel_name, subscribers, views, total_videos, description, playlist_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                channel_name = VALUES(channel_name),
-                subscribers = VALUES(subscribers),
-                views = VALUES(views),
-                total_videos = VALUES(total_videos),
-                description = VALUES(description),
-                playlist_id = VALUES(playlist_id)
-            """, (
-                channel_data["channel_id"],
-                channel_data["channel_name"],
-                channel_data["subscribers"],
-                channel_data["views"],
-                channel_data["total_videos"],
-                channel_data["description"],
-                channel_data["playlist_id"]
-            ))
-            conn.commit()
-        st.success(f"\u2705 Data for {channel_data['channel_name']} stored successfully!")
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+            cursor.execute(query, params if params else ())
+            result = cursor.fetchall()
+            return pd.DataFrame(result)
     except Exception as e:
-        st.error(f"\u274C Error storing channel data: {e}")
+        st.error(f"❌ Query error: {e}")
+        return pd.DataFrame()
     finally:
         conn.close()
 
-# ---------------------- Fetch YouTube Data ----------------------
+# ---------------------- Fetch & Store Channel Info ----------------------
 def fetch_channel_data(channel_id):
     try:
-        request = youtube.channels().list(
+        response = youtube.channels().list(
             part="snippet,statistics,contentDetails",
             id=channel_id
-        )
-        response = request.execute()
-        
-        if "items" in response and response["items"]:
+        ).execute()
+
+        if response.get("items"):
             data = response["items"][0]
             return {
                 "channel_id": channel_id,
@@ -83,25 +63,94 @@ def fetch_channel_data(channel_id):
             }
         return None
     except Exception as e:
-        st.error(f"\u274C Error fetching channel data: {e}")
+        st.error(f"❌ Error fetching channel data: {e}")
         return None
 
-# ---------------------- Fetch Data from MySQL ----------------------
-def fetch_data(query, params=None):
+def store_channel_data(channel_data):
     conn = get_db_connection()
     if not conn:
-        return pd.DataFrame()  
-
+        return
     try:
-        with conn.cursor(dictionary=True) as cursor:
-            cursor.execute(query, params if params else ())
-            result = cursor.fetchall()
-            return pd.DataFrame(result)
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO channels (channel_id, channel_name, subscribers, views, total_videos, description, playlist_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (channel_id) DO UPDATE SET
+                    channel_name = EXCLUDED.channel_name,
+                    subscribers = EXCLUDED.subscribers,
+                    views = EXCLUDED.views,
+                    total_videos = EXCLUDED.total_videos,
+                    description = EXCLUDED.description,
+                    playlist_id = EXCLUDED.playlist_id
+            """, (
+                channel_data["channel_id"],
+                channel_data["channel_name"],
+                channel_data["subscribers"],
+                channel_data["views"],
+                channel_data["total_videos"],
+                channel_data["description"],
+                channel_data["playlist_id"]
+            ))
+            conn.commit()
+        st.success(f"✅ Channel '{channel_data['channel_name']}' stored.")
     except Exception as e:
-        st.error(f"\u274C Error executing query: {e}")
-        return pd.DataFrame()
+        st.error(f"❌ Error storing channel: {e}")
     finally:
         conn.close()
+
+# ---------------------- Fetch & Store Playlists ----------------------
+def fetch_playlists(channel_id):
+    try:
+        response = youtube.playlists().list(
+            part="snippet",
+            channelId=channel_id,
+            maxResults=50
+        ).execute()
+        return [{
+            "playlist_id": item["id"],
+            "title": item["snippet"]["title"],
+            "channel_id": channel_id
+        } for item in response.get("items", [])]
+    except Exception as e:
+        st.error(f"❌ Error fetching playlists: {e}")
+        return []
+
+def store_playlists(playlists):
+    conn = get_db_connection()
+    if not conn or not playlists:
+        return
+    try:
+        with conn.cursor() as cursor:
+            for p in playlists:
+                cursor.execute("""
+                    INSERT INTO playlists (playlist_id, title, channel_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (playlist_id) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        channel_id = EXCLUDED.channel_id
+                """, (p["playlist_id"], p["title"], p["channel_id"]))
+            conn.commit()
+        st.success("✅ Playlists stored.")
+    except Exception as e:
+        st.error(f"❌ Error storing playlists: {e}")
+    finally:
+        conn.close()
+
+# ---------------------- Streamlit UI ----------------------
+st.set_page_config(page_title="YouTube Harvester", layout="wide")
+
+st.title("📺 YouTube Channel Harvester")
+channel_id = st.text_input("Enter Channel ID")
+
+if st.button("Collect Channel + Playlists"):
+    if channel_id:
+        channel_data = fetch_channel_data(channel_id)
+        if channel_data:
+            store_channel_data(channel_data)
+            playlists = fetch_playlists(channel_id)
+            store_playlists(playlists)
+        else:
+            st.warning("⚠️ Invalid or missing channel.")
 
 # ---------------------- Data Migration Function ----------------------
 def migrate_data():
@@ -114,18 +163,27 @@ def migrate_data():
             cursor.execute("""
                 INSERT INTO archived_videos (video_id, title, views, likes, comments)
                 SELECT video_id, title, views, likes, comment_count FROM videos
-                ON DUPLICATE KEY UPDATE
-                views = VALUES(views),
-                likes = VALUES(likes),
-                comments = VALUES(comments)
+                ON CONFLICT (video_id) DO UPDATE SET
+                    views = EXCLUDED.views,
+                    likes = EXCLUDED.likes,
+                    comments = EXCLUDED.comments
             """)
             conn.commit()
-        st.success("\u2705 Data migration completed successfully!")
+        st.success("✅ Data migration completed successfully!")
     except Exception as e:
-        st.error(f"\u274C Data migration failed: {e}")
+        st.error(f"❌ Data migration failed: {e}")
     finally:
         conn.close()
 
+# ---------------------- Streamlit UI ----------------------
+if st.button("🛠️ Migrate Video Data"):
+    migrate_data()
+
+if channel_id:
+    st.subheader("📋 Playlists")
+    df = fetch_data("SELECT * FROM playlists WHERE channel_id = %s", (channel_id,))
+    st.dataframe(df if not df.empty else pd.DataFrame([{"info": "No playlists found."}]))
+    
 # ---------------------- Streamlit UI ----------------------
 st.markdown("""
     <div style="text-align: center;">
@@ -134,11 +192,7 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-
-import streamlit as st
-
 # ---------------------- Streamlit UI Layout ----------------------
-st.sidebar.title("📌 Skills Takeaway from This Project")
 st.sidebar.write("""
 - 🐍 **Python Scripting**  
 - 📊 **Data Collection**  
@@ -147,9 +201,6 @@ st.sidebar.write("""
 - 🗄️ **Data Management using SQL**  
 - 📊 **Data Visualization using Plotly & Matplotlib**  
 """)
-
-# User input for Channel ID
-channel_id = st.text_input("🔎 Enter the Channel ID")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -238,7 +289,7 @@ QUERIES = {
         FROM videos v
         JOIN channels c ON v.channel_id = c.channel_id
     """,
- 
+
     "Channels with Most Videos": """
         SELECT c.channel_name, COUNT(v.video_id) AS video_count
         FROM videos v
@@ -246,7 +297,7 @@ QUERIES = {
         GROUP BY c.channel_name
         ORDER BY video_count DESC
     """,
- 
+
     "Top 10 Most Viewed Videos": """
         SELECT v.title AS video_name, c.channel_name, v.views
         FROM videos v
@@ -254,21 +305,21 @@ QUERIES = {
         ORDER BY v.views DESC
         LIMIT 10
     """,
- 
+
     "Total Views per Channel": """
         SELECT c.channel_name, COALESCE(SUM(v.views), 0) AS total_views
         FROM channels c
         LEFT JOIN videos v ON c.channel_id = v.channel_id
         GROUP BY c.channel_name
     """,
- 
+
     "Channels that Published Videos in 2022": """
         SELECT DISTINCT c.channel_name
         FROM videos v
         JOIN channels c ON v.channel_id = c.channel_id
         WHERE YEAR(v.published_date) = 2022
     """,
- 
+
     "Average Video Duration per Channel": """
         SELECT
             c.channel_name,
@@ -282,7 +333,7 @@ QUERIES = {
         WHERE v.duration IS NOT NULL AND v.duration <> ''
         GROUP BY c.channel_name
     """,
- 
+
     "Top 10 Videos with Most Comments": """
         SELECT v.title AS video_name, c.channel_name, COUNT(cm.comment_id) AS comment_count
         FROM comments cm
@@ -292,7 +343,7 @@ QUERIES = {
         ORDER BY comment_count DESC
         LIMIT 10
     """,
- 
+
     "Videos with Most Likes": """
         SELECT v.title AS video_name, c.channel_name, v.likes
         FROM videos v
@@ -300,13 +351,13 @@ QUERIES = {
         ORDER BY v.likes DESC
         LIMIT 10
     """,
- 
+
     "Total Likes per Video": """
         SELECT v.title AS video_name, v.likes
         FROM videos v
         ORDER BY v.likes DESC
     """,
- 
+
     "Videos with Most Liked Comments": """
         SELECT v.title AS video_name, c.channel_name, SUM(cm.likes) AS total_comment_likes  
         FROM comments cm  
@@ -317,14 +368,6 @@ QUERIES = {
         LIMIT 10
     """
 }
-
- 
-import streamlit as st
-import plotly.express as px
-
-def fetch_data(query, params=None):
-    # Placeholder function for database queries
-    return ""  # Replace with actual database fetching logic
 
 st.title("🔍 YouTube Data Insights")
 
